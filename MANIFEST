@@ -1,0 +1,8 @@
+Changes
+Makefile.PL
+MANIFEST
+ppport.h
+README
+Spy.xs
+t/Hash-Spy.t
+lib/Hash/Spy.pm
