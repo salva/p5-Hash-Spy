@@ -6,3 +6,4 @@ README
 Spy.xs
 t/Hash-Spy.t
 lib/Hash/Spy.pm
+t/pods.t

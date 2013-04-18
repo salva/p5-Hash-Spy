@@ -1,40 +1,44 @@
 package Hash::Spy;
 
-use 5.014002;
+our $VERSION = '0.01';
+
 use strict;
 use warnings;
+use 5.010;
+use Carp;
 
 require Exporter;
-
 our @ISA = qw(Exporter);
-
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
-
-# This allows declaration	use Hash::Spy ':all';
-# If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
-# will save memory.
-our %EXPORT_TAGS = ( 'all' => [ qw(
-	
-) ] );
-
-our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
-
-our @EXPORT = qw(
-	
-);
-
-our $VERSION = '0.01';
+our @EXPORT_OK = qw(spy_hash);
 
 require XSLoader;
 XSLoader::load('Hash::Spy', $VERSION);
 
-# Preloaded methods go here.
+my %cb_slot = ( add    => 1,
+                change => 2,
+                store  => 3,
+                clear  => 4,
+                empty  => 5 );
+
+sub spy_hash (\%@) {
+    my $hash = shift;
+    my $spy = _hash_get_spy($hash);
+    while (@_) {
+        my $name = shift;
+        my $slot = $cb_slot{$name}
+            or croak "bad spy callback '$name'";
+        my $cb = shift;
+        if (defined $cb) {
+            UNIVERSAL::isa($cb, 'CODE')
+                    or croak "spy callback '$name' is not a CODE ref";
+        }
+        $spy->[$slot] = $cb;
+    }
+    1;
+}
 
 1;
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 NAME
 
