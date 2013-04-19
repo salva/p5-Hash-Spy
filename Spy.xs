@@ -22,31 +22,59 @@ my_fetch_ref(pTHX_ AV *av, IV key, IV mandatory) {
 #define fetch(av, key) my_fetch_ref(aTHX_ av, key, 0)
 #define fetch_hv(av) ((HV*)SvRV((my_fetch_ref(aTHX_ av, 0, 1))))
 
-#define ADD    1
-#define CHANGE 2
+#define SAVED_ITER 1
+
+#define DELETE 2
 #define STORE  3
 #define CLEAR  4
 #define EMPTY  5
 
-void
-callback(pTHX_ SV *cb, U32 argc, ...) {
-    dSP;
-    ENTER;
-    PUSHMARK(SP);
-    if (argc > 0) {
-        va_list args;
-        va_start(args, argc);
-        EXTEND(SP, argc);
-        do {
-            SV *const sv = va_arg(args, SV *);
-            PUSHs(sv);
-        } while (--argc);
-        va_end(args);
+static void
+spyback(pTHX_ AV *spy, HV *hv, int slot, U32 argc, ...) {
+    SV *cb = fetch(spy, slot);
+    if (cb) {
+        dSP;
+        ENTER;
+        SAVETMPS;
+        PUSHMARK(SP);
+        EXTEND(SP, argc + 1);
+        PUSHs(sv_2mortal(newRV_inc((SV*)hv)));
+        if (argc > 0) {
+            va_list args;
+            va_start(args, argc);
+            do {
+                SV *const sv = va_arg(args, SV *);
+                PUSHs(sv_mortalcopy(sv));
+            } while (--argc);
+            va_end(args);
+        }
+        PUTBACK;
+        call_sv(cb, G_SCALAR|G_DISCARD);
+        FREETMPS;
+        LEAVE;
     }
-    PUTBACK;
-    call_sv(cb, G_SCALAR|G_DISCARD);
-    LEAVE;
 }
+
+static void
+switch_hv_aux(pTHX_ AV *spy, HV *hv) {
+    if (SvOOK((SV*)hv)) {
+        SV **svp = av_fetch(spy, SAVED_ITER, 0);
+        if (svp) {
+            SV *sv = *svp;
+            if (sv && SvPOK(sv) && (SvCUR(sv) == sizeof(struct xpvhv_aux))) {
+                char tmp[sizeof(struct xpvhv_aux)];
+                char *pv = SvPVX(sv);
+                Copy(pv,        tmp,       sizeof(struct xpvhv_aux), char);
+                Copy(HvAUX(hv), pv,        sizeof(struct xpvhv_aux), char);
+                Copy(tmp,       HvAUX(hv), sizeof(struct xpvhv_aux), char);
+                return;
+            }
+        }
+        Perl_croak(aTHX_ "internal error: saved HV iter missing");
+    }
+    Perl_croak(aTHX_ "internal error: HV OOK flag is unset");
+}
+
 
 MODULE = Hash::Spy		PACKAGE = Hash::Spy		
 
@@ -63,10 +91,20 @@ CODE:
     else {
         AV *av = newAV();
         SV *weak = newRV_inc((SV*)hv);
+        SV *store;
+        struct xpvhv_aux* iter;
         sv_rvweaken(weak);
         av_store(av, 0, weak);
         RETVAL = newRV_noinc((SV*)av);
         sv_bless(RETVAL, gv_stashpvs("Hash::Spy", 1));
+        if (!SvOOK(hv)) {
+            hv_iterinit(hv);
+            if (!SvOOK(hv))
+                Perl_croak(aTHX_ "internal error: hv_iterinit did not set OOK");
+        }
+        iter = HvAUX(hv);
+        av_store(av, SAVED_ITER, newSVpvn((char *)iter, sizeof(*iter)));
+        HvEITER_set(hv, 0);
         hv_magic(hv, RETVAL, PERL_MAGIC_tied);
     }
 OUTPUT:
@@ -93,6 +131,7 @@ PREINIT:
     HV *hv;
 CODE:
     hv = fetch_hv(spy);
+    spyback(aTHX_ spy, hv, STORE, 2, key, value);
     SvRMAGICAL_off(hv);
     SvREFCNT_inc(value);
     if (!hv_store_ent(hv, key, value, 0)) sv_2mortal(value);
@@ -104,10 +143,15 @@ PREINIT:
     HV *hv;
 CODE:
     hv = fetch_hv(spy);
+    spyback(aTHX_ spy, hv, DELETE, 1, key);
     SvRMAGICAL_off(hv);
+    switch_hv_aux(aTHX_ spy, hv);
     RETVAL = hv_delete_ent(hv, key, 0, 0);
+    switch_hv_aux(aTHX_ spy, hv);
     SvRMAGICAL_on(hv);
     SvREFCNT_inc(RETVAL);
+    if (!HvTOTALKEYS(hv))
+        spyback(aTHX_ spy, hv, EMPTY, 0);
 OUTPUT:
     RETVAL
 
@@ -118,11 +162,14 @@ PREINIT:
     SV *cb;
 CODE:
     hv = fetch_hv(spy);
-    if (cb = fetch(spy, CLEAR)) callback(aTHX_ cb, 0);
+    spyback(aTHX_ spy, hv, CLEAR, 0);
     SvRMAGICAL_off(hv);
+    switch_hv_aux(aTHX_ spy, hv);
     hv_clear(hv);
+    switch_hv_aux(aTHX_ spy, hv);
     SvRMAGICAL_on(hv);
-    if (cb = fetch(spy, EMPTY)) callback(aTHX_ cb, 0);
+    if (!HvTOTALKEYS(hv))
+        spyback(aTHX_ spy, hv, EMPTY, 0);
 
 SV *
 EXISTS(AV *spy, SV *key)
@@ -140,29 +187,40 @@ SV *
 FIRSTKEY(AV *spy)
 PREINIT:
     HV *hv;
-CODE:
-    hv = fetch_hv(spy);
-    SvRMAGICAL_off(hv);
-    hv_iterinit(hv);
-    SvRMAGICAL_on(hv);
-    RETVAL = &PL_sv_yes;
-OUTPUT:
-    RETVAL
-
-SV *
-NEXTKEY(AV *spy)
-PREINIT:
-    HV *hv;
     HE *he;
 CODE:
     hv = fetch_hv(spy);
     SvRMAGICAL_off(hv);
+    switch_hv_aux(aTHX_ spy, hv);
+    hv_iterinit(hv);
     if (he = hv_iternext(hv)) {
         RETVAL = hv_iterkeysv(he);
     }
     else {
         RETVAL = &PL_sv_undef;
     }
+    switch_hv_aux(aTHX_ spy, hv);
+    SvRMAGICAL_on(hv);
+    SvREFCNT_inc(RETVAL);
+OUTPUT:
+    RETVAL
+
+SV *
+NEXTKEY(AV *spy, SV *last)
+PREINIT:
+    HV *hv;
+    HE *he;
+CODE:
+    hv = fetch_hv(spy);
+    SvRMAGICAL_off(hv);
+    switch_hv_aux(aTHX_ spy, hv);
+    if (he = hv_iternext(hv)) {
+        RETVAL = hv_iterkeysv(he);
+    }
+    else {
+        RETVAL = &PL_sv_undef;
+    }
+    switch_hv_aux(aTHX_ spy, hv);
     SvRMAGICAL_on(hv);
     SvREFCNT_inc(RETVAL);
 OUTPUT:
@@ -183,4 +241,6 @@ OUTPUT:
 
 void
 UNTIE(AV *spy)
+CODE:
+    av_clear(spy);
 

@@ -14,8 +14,7 @@ our @EXPORT_OK = qw(spy_hash);
 require XSLoader;
 XSLoader::load('Hash::Spy', $VERSION);
 
-my %cb_slot = ( add    => 1,
-                change => 2,
+my %cb_slot = ( delete => 2,
                 store  => 3,
                 clear  => 4,
                 empty  => 5 );
