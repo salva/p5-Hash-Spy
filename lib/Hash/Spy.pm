@@ -41,7 +41,7 @@ __END__
 
 =head1 NAME
 
-Hash::Spy - run code when a has is changed
+Hash::Spy - Run code when a hash is changed
 
 =head1 SYNOPSIS
 
