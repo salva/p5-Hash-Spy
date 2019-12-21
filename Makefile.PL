@@ -10,4 +10,9 @@ WriteMakefile( NAME          => 'Hash::Spy',
                AUTHOR        => 'Salvador Fandino <sfandino@yahoo.com>',
                LIBS          => [''],
                DEFINE        => '',
-               INC           => '-I.' );
+               INC           => '-I.',
+               META_MERGE => {
+                   resources => {
+                       repository => 'https://github.com/salva/p5-Hash-Spy',
+                   },
+               });
